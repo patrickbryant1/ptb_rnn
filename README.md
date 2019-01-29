@@ -1,0 +1,2 @@
+# ptb_rnn
+A recurrent neural network of stacked LSTMs that predict text sequences using the Penn Treebank dataset.
