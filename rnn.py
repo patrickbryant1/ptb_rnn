@@ -23,12 +23,12 @@ number_of_layers = 3
 
 num_unrollings = 20
 
-batch_size = 128
+batch_size = 32
 vocab_size = 10000
 
 
 num_nodes = 512
-embedding_size = 128 # Dimension of the embedding vector.
+embedding_size = int(vocab_size*0.25) # Dimension of the embedding vector.
 
 
 #Graph
