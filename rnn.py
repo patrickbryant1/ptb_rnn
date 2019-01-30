@@ -13,24 +13,23 @@ data_path = '/Users/patbry/Documents/Tensorflow/RNN/simple-examples/data'
 raw_data = reader.ptb_raw_data(data_path)
 train_data, valid_data, test_data, vocabulary = raw_data
 
-
 #Parameters
-start_learning_rate = 0.01
+start_learning_rate = 0.001
 decay_steps = 1000
 decay_rate = 0.95
 
 number_of_layers = 3
 
 num_unrollings = 20
-
-batch_size = 32
+batch_size = 20
 vocab_size = 10000
 
+forget_bias = 1.0
+num_nodes = 200
+embedding_size = 128 # Dimension of the embedding vector.
+keep_prob = 0.5
 
-num_nodes = 512
-embedding_size = int(vocab_size*0.25) # Dimension of the embedding vector.
-
-
+num_epochs = 14
 #Graph
 graph = tf.Graph()
 
@@ -63,7 +62,7 @@ with graph.as_default():
 
   
   def lstm_cell():
-    return tf.contrib.rnn.BasicLSTMCell(num_nodes, forget_bias=1.0)
+    return tf.contrib.rnn.BasicLSTMCell(num_nodes, forget_bias=1.0) #tf.contrib.rnn.LSTMBlockCell(num_nodes, forget_bias=forget_bias)# tf.nn.rnn_cell.LSTMCell(num_nodes, forget_bias=forget_bias) #, use_peepholes=True)
   stacked_lstm = tf.contrib.rnn.MultiRNNCell([lstm_cell() for _ in range(number_of_layers)])
 
 
@@ -93,8 +92,8 @@ with graph.as_default():
   final_state = state
   
   logits = tf.nn.xw_plus_b(tf.concat(outputs, 0), softmax_w, softmax_b) #Computes matmul, need to have this tf concat, any other and it complains
-  logits = tf.nn.dropout(logits, 0.5) #Dropout to reduce overfitting - still overfits AF though
-  logits = 2*logits #Normalize by multiplying with 2. Then simply remove for validation.
+  logits = tf.nn.dropout(logits, keep_prob) #Dropout to reduce overfitting - still overfits AF though
+  #logits = (1/keep_prob)*logits #Normalize by multiplying with 2. Then simply remove for validation.
   logits = tf.reshape(logits, [num_unrollings ,batch_size,vocab_size])    
 
   #Returns 1D batch-sized float Tensor: The log-perplexity for each sequence.
@@ -150,6 +149,11 @@ with graph.as_default():
   valid_perplexity = tf.math.exp(tf.reduce_mean(valid_loss)) #Take mean of softmax probabilities and then the exp --> perplexity. Use e as base, as tf measures the cross-entropy loss with the natural logarithm.
   valid_predictions = tf.argmax(tf.nn.softmax(valid_logits), axis = -1)
  
+
+  # add a summary to store the perplexity
+  tf.summary.scalar('train_perplexity', train_perplexity)
+  tf.summary.scalar('validation_perplexity', valid_perplexity)
+  merged = tf.summary.merge_all()
  
  #Evaluate
 def get_words(predictions):
@@ -167,14 +171,22 @@ def get_words(predictions):
     return pred_words
             
 
+#Graph
+STORE_PATH = '/Users/patbry/Documents/Tensorflow/RNN'
+
+
 
 #Run model
 #Store perplexities at each step
 store_perplexities = []
-num_steps = 10001
+epoch = len(train_data)/(num_unrollings*batch_size)
+num_steps = epoch*num_epochs #They use max_max_epoch = 55, which means they will go through all data 55 times --> 55*len(train_data)/(num_unrollings*batch_size) steps
+num_steps = (num_steps/100)*100 #Get congruent with 100
+
 with tf.Session(graph=graph) as session:
   tf.global_variables_initializer().run()
   print('Initialized')
+  writer = tf.summary.FileWriter(STORE_PATH, session.graph)
  
   for step in range(num_steps):
   #Get train data and labels
@@ -201,10 +213,10 @@ with tf.Session(graph=graph) as session:
     #Feed dict
     feed_dict= {train_inputs: train_feed_inputs, train_labels: train_feed_labels, valid_inputs: valid_feed_inputs, valid_labels: valid_feed_labels }
 
-    _, t_perplexity, train_pred, v_perplexity, valid_pred = session.run(
-      [optimizer, train_perplexity, train_predictions, valid_perplexity, valid_predictions], feed_dict= feed_dict)
+    _, t_perplexity, train_pred, v_perplexity, valid_pred, summary = session.run(
+      [optimizer, train_perplexity, train_predictions, valid_perplexity, valid_predictions, merged], feed_dict= feed_dict)
 
-    
+    writer.add_summary(summary, step)
     #Print preds
     if step%100 == 0:
       print('Train perplexity at step %d: %f' % (step, t_perplexity)) #, valid_perplexity.eval()
@@ -222,7 +234,7 @@ with tf.Session(graph=graph) as session:
   print 'valid_labels: ' + get_words(valid_feed_labels) + '\n'
   plot_training.plot_training(store_perplexities)
 
-    
+  
 
 
 
