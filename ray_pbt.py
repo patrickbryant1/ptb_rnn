@@ -30,6 +30,9 @@ ray.init()
 
 
 def MyTrainable(config, reporter):
+
+    '''A function containig the entire TensorFlow model
+    '''
     # Setup your tensorflow model
     # Hyperparameters for this trial can be accessed in dictionary config
     params = config
@@ -147,8 +150,6 @@ def MyTrainable(config, reporter):
       valid_predictions = tf.argmax(tf.nn.softmax(valid_logits), axis = -1)
 
 
-
-    #saver = tf.train.Saver()
     # Start a tensorflow session
     with tf.Session(graph=graph) as session:
         tf.global_variables_initializer().run()
@@ -184,9 +185,10 @@ def MyTrainable(config, reporter):
             reporter(timesteps_total=step, mean_loss=v_perplexity)
         
     	   
-
+#Register trainable function
 tune.register_trainable('MyTrainable', MyTrainable)
 
+#Specify parameters for training
 train_spec = {
   'run': MyTrainable,
   # Specify the number of CPU cores and GPUs each trial requires
@@ -212,7 +214,7 @@ train_spec = {
   'num_samples': 4
 }
 
-
+#Population based training
 pbt = PopulationBasedTraining(
   time_attr='training_iteration',
   reward_attr='mean_loss',
@@ -222,6 +224,8 @@ pbt = PopulationBasedTraining(
     'start_learning_rate': [1e-2, 1e-3, 1e-4]
   }
 )
+
+#Run the experiment. Follow progress by: tensorboard --logdir ~/ray_results/population_based_training
 tune.run_experiments({'population_based_training': train_spec}, scheduler=pbt)
 
 
