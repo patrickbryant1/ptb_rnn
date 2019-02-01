@@ -189,16 +189,16 @@ class MyTrainable(tune.Trainable):
     # Run your training op for n iterations
     num_unrollings = self.config['num_unrollings']
     batch_size = self.config['batch_size']
-    for step in range(101):
+    #for step in range(10001):
       # Load your data
       
-      train_feed_inputs, train_feed_labels, valid_feed_inputs, valid_feed_labels = get_data(num_unrollings, batch_size) #Must generate new random data for each step - a bottleneck
-      feed_dict= {self.model.train_inputs: train_feed_inputs, self.model.train_labels: train_feed_labels, self.model.valid_inputs: valid_feed_inputs, self.model.valid_labels: valid_feed_labels }
-      self.sess.run(self.model.optimize, feed_dict = feed_dict)
+    train_feed_inputs, train_feed_labels, valid_feed_inputs, valid_feed_labels = get_data(num_unrollings, batch_size) #Must generate new random data for each step - a bottleneck
+    feed_dict= {self.model.train_inputs: train_feed_inputs, self.model.train_labels: train_feed_labels, self.model.valid_inputs: valid_feed_inputs, self.model.valid_labels: valid_feed_labels }
+    self.sess.run(self.model.optimize, feed_dict = feed_dict)
 
     # Report a performance metric to be used in your hyperparameter search
     v_perplexity = self.sess.run(self.model.valid_perplexity, feed_dict = feed_dict)
-    return {"timesteps_total":step, "mean_loss":v_perplexity} #tune.TrainingResult(timesteps_this_iter=n, mean_loss=validation_loss)
+    return {"mean_loss":v_perplexity} #tune.TrainingResult(timesteps_this_iter=n, mean_loss=validation_loss)
 
   def _stop(self):
     self.sess.close()
