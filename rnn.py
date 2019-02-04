@@ -6,7 +6,7 @@ import reader
 import tensorflow as tf
 import numpy as np
 import random
-import plot_training
+
 
 #Get data - no labels
 data_path = '/Users/patbry/Documents/Tensorflow/RNN/simple-examples/data'
@@ -15,8 +15,10 @@ train_data, valid_data, test_data, vocabulary = raw_data
 
 #Parameters
 start_learning_rate = 0.001
-decay_steps = 1000
+decay_steps = 1000 #1 epoch = 1000000/20*20 = 2500 steps
 decay_rate = 0.95
+
+max_grad_norm = 5.0
 
 number_of_layers = 3
 
@@ -24,12 +26,13 @@ num_unrollings = 20
 batch_size = 20
 vocab_size = 10000
 
-forget_bias = 1.0
+forget_bias = 0.0
 num_nodes = 200
 embedding_size = 128 # Dimension of the embedding vector.
 keep_prob = 0.5
 
-num_epochs = 14
+num_steps = 50000
+
 #Graph
 graph = tf.Graph()
 
@@ -37,7 +40,7 @@ with graph.as_default():
     
     
     # Classifier weights and biases. Must be vocab size, otherwise all words will not be represented in logits
-  softmax_w = tf.Variable(tf.truncated_normal([num_nodes, vocab_size], -0.1, 0.1))
+  softmax_w = tf.Variable(tf.truncated_normal([num_nodes, vocab_size], stddev=0.1))
   softmax_b = tf.Variable(tf.zeros([vocab_size]))
   
   	#Embedding vector
@@ -62,19 +65,15 @@ with graph.as_default():
 
   
   def lstm_cell():
-    return tf.contrib.rnn.BasicLSTMCell(num_nodes, forget_bias=1.0) #tf.contrib.rnn.LSTMBlockCell(num_nodes, forget_bias=forget_bias)# tf.nn.rnn_cell.LSTMCell(num_nodes, forget_bias=forget_bias) #, use_peepholes=True)
+    return tf.contrib.rnn.BasicLSTMCell(num_nodes, forget_bias=forget_bias, activation=tf.nn.leaky_relu) #Have to fix vanishing gradient problem, activate with relu. Not possible --> inf norms for clipping
+    #tf.contrib.rnn.LSTMBlockCell(num_nodes, forget_bias=forget_bias)# tf.nn.rnn_cell.LSTMCell(num_nodes, forget_bias=forget_bias) #, use_peepholes=True)
   stacked_lstm = tf.contrib.rnn.MultiRNNCell([lstm_cell() for _ in range(number_of_layers)])
 
-
   #LSTM
-  #lstm = tf.contrib.rnn.BasicLSTMCell(num_nodes, forget_bias=1.0)
   # Initial state of the LSTM memory.
   state = stacked_lstm.zero_state(batch_size, tf.float32) #Initial state. Return zero-filled state tensor(s).
- 
-
-
   
-  outputs = []
+  outputs = [] #Store outputs
     
   #Unrolled lstm loop  
   for i in range(num_unrollings):
@@ -84,35 +83,32 @@ with graph.as_default():
     	# Look up embeddings for inputs.
       output, state = stacked_lstm(embed, state)
 
-      #output, state = tf.nn.dynamic_rnn(stacked_lstm, embed, state)
-
       outputs.append(output)
 
   #Save final state for validation and testing
   final_state = state
   
-  logits = tf.nn.xw_plus_b(tf.concat(outputs, 0), softmax_w, softmax_b) #Computes matmul, need to have this tf concat, any other and it complains
-  logits = tf.nn.dropout(logits, keep_prob) #Dropout to reduce overfitting - still overfits AF though
-  #logits = (1/keep_prob)*logits #Normalize by multiplying with 2. Then simply remove for validation.
-  logits = tf.reshape(logits, [num_unrollings ,batch_size,vocab_size])    
 
+  logits = tf.nn.xw_plus_b(tf.concat(outputs, 0), softmax_w, softmax_b) #Computes matmul, need to have this tf concat, any other and it complains
+  logits = tf.layers.batch_normalization(logits, training=True) #Batch normalize to avoid vanishing gradients
+  logits = tf.nn.dropout(logits, keep_prob) #Dropout to reduce overfitting
+  logits = (1/keep_prob)*logits #Normalize by multiplying with 2. Then simply remove for validation.
+  logits = tf.reshape(logits, [num_unrollings ,batch_size,vocab_size])    
+  
   #Returns 1D batch-sized float Tensor: The log-perplexity for each sequence.
   #The labels are encoded using a unique int for each word in the vocabulary, but the proabilities
   #are one hot. This is why the train labels have to be one hot as well. 
   
-  loss = tf.nn.softmax_cross_entropy_with_logits(
+  loss = tf.nn.softmax_cross_entropy_with_logits_v2(
     labels=tf.concat(train_labels_hot, 0), logits=logits)
   
   train_perplexity = tf.math.exp(tf.reduce_mean(loss)) #Reduce mean is a very "strong" mean
   
   train_predictions = tf.argmax(tf.nn.softmax(logits), axis = -1)
-  
 
   
-  #targets = tf.to_float(tf.concat(train_labels, 0))
-  #loss = tf.contrib.legacy_seq2seq.sequence_loss(logits=logits, targets = targets, weights = tf.ones([batch_size, num_unrollings, 1], dtype=tf.float32))
-  #total_loss += loss
 
+  #Learning rate
   global_step = tf.Variable(0, trainable=False)
   
   learning_rate = tf.train.exponential_decay(
@@ -123,20 +119,11 @@ with graph.as_default():
   staircase=True)
   
   #Optimizer
-  optimizer=tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(train_perplexity)
+  optimizer=tf.train.AdamOptimizer(learning_rate=learning_rate) #.minimize(train_perplexity)
+  save_gradients, variables = zip(*optimizer.compute_gradients(train_perplexity))
+  gradients, _ = tf.clip_by_global_norm(save_gradients, max_grad_norm)
+  optimize = optimizer.apply_gradients(zip(gradients, variables))
 
-  
-  
-
-
-
-
-#Can also stack
-#def lstm_cell():
- # return tf.contrib.rnn.BasicLSTMCell(lstm_size)
-#stacked_lstm = tf.contrib.rnn.MultiRNNCell(
- #   [lstm_cell() for _ in range(number_of_layers)])
- 
  #Validation
   
   valid_embed = tf.nn.embedding_lookup(valid_embeddings, valid_inputs)
@@ -144,8 +131,8 @@ with graph.as_default():
 
   #valid_output, state = tf.nn.dynamic_rnn(stacked_lstm, embed, final_state)
   valid_logits = tf.nn.xw_plus_b(valid_output, softmax_w, softmax_b) #Computes matmul, need to have this tf concat, any other and it complains
-  valid_loss = tf.nn.softmax_cross_entropy_with_logits(
-    labels=valid_hot, logits=valid_logits)
+  logits = tf.layers.batch_normalization(logits, training=False) #Batch normalize to avoid vanishing gradients
+  valid_loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=valid_hot, logits=valid_logits)
   valid_perplexity = tf.math.exp(tf.reduce_mean(valid_loss)) #Take mean of softmax probabilities and then the exp --> perplexity. Use e as base, as tf measures the cross-entropy loss with the natural logarithm.
   valid_predictions = tf.argmax(tf.nn.softmax(valid_logits), axis = -1)
  
@@ -153,6 +140,7 @@ with graph.as_default():
   # add a summary to store the perplexity
   tf.summary.scalar('train_perplexity', train_perplexity)
   tf.summary.scalar('validation_perplexity', valid_perplexity)
+  #tf.summary.histogram('gradients', save_gradients)
   merged = tf.summary.merge_all()
  
  #Evaluate
@@ -172,16 +160,13 @@ def get_words(predictions):
             
 
 #Graph
-STORE_PATH = '/Users/patbry/Documents/Tensorflow/RNN'
+STORE_PATH = '/Users/patbry/Documents/Tensorflow/RNN/visual/'
 
 
 
 #Run model
 #Store perplexities at each step
 store_perplexities = []
-epoch = len(train_data)/(num_unrollings*batch_size)
-num_steps = epoch*num_epochs #They use max_max_epoch = 55, which means they will go through all data 55 times --> 55*len(train_data)/(num_unrollings*batch_size) steps
-num_steps = (num_steps/100)*100 #Get congruent with 100
 
 with tf.Session(graph=graph) as session:
   tf.global_variables_initializer().run()
@@ -190,13 +175,16 @@ with tf.Session(graph=graph) as session:
  
   for step in range(num_steps):
   #Get train data and labels
+    if step > 1000:
+      start_learning_rate = 0.1
+
     train_feed_inputs = [] #Lists to store train inputs
     train_feed_labels = []
     
   #Now the structure for the train input is created. Now we have to feed the train_data
     for i in range(num_unrollings):
     #Has to be sequential - otherwise how can it learn what should come after?
-      train_start = random.randint(0,vocab_size-batch_size)
+      train_start = random.randint(0,len(train_data)-2*batch_size)
       train_feed_inputs.append(train_data[train_start:train_start+batch_size])
       train_feed_labels.append(train_data[train_start+batch_size:train_start+2*batch_size])
       
@@ -209,12 +197,11 @@ with tf.Session(graph=graph) as session:
     valid_feed_inputs = np.array(list(valid_data[valid_start:valid_start+batch_size]))
     valid_feed_labels = np.array(list(valid_data[valid_start+batch_size:valid_start+(2*batch_size)]))
 
-
+    #pdb.set_trace()
     #Feed dict
     feed_dict= {train_inputs: train_feed_inputs, train_labels: train_feed_labels, valid_inputs: valid_feed_inputs, valid_labels: valid_feed_labels }
 
-    _, t_perplexity, train_pred, v_perplexity, valid_pred, summary = session.run(
-      [optimizer, train_perplexity, train_predictions, valid_perplexity, valid_predictions, merged], feed_dict= feed_dict)
+    _, t_perplexity, train_pred, v_perplexity, valid_pred, summary = session.run([optimize, train_perplexity, train_predictions, valid_perplexity, valid_predictions, merged], feed_dict= feed_dict)
 
     writer.add_summary(summary, step)
     #Print preds
@@ -228,11 +215,9 @@ with tf.Session(graph=graph) as session:
       print 'valid_input: ' + get_words(valid_feed_inputs)
       print 'valid_pred: ' + get_words(valid_pred) + '\n'
 
-      store_perplexities.append(str(step) + '/' + str(t_perplexity) + '/' + str(v_perplexity))
-
     #Print labels for final validation run
   print 'valid_labels: ' + get_words(valid_feed_labels) + '\n'
-  plot_training.plot_training(store_perplexities)
+
 
   
 
