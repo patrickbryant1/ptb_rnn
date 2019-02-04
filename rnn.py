@@ -15,7 +15,7 @@ train_data, valid_data, test_data, vocabulary = raw_data
 
 #Parameters
 start_learning_rate = 0.001
-decay_steps = 1000 #1 epoch = 1000000/20*20 = 2500 steps
+decay_steps = 10000 #1 epoch = 1000000/(batch_size*num_unrollings) steps
 decay_rate = 0.95
 
 max_grad_norm = 5.0
@@ -26,7 +26,7 @@ num_unrollings = 20
 batch_size = 20
 vocab_size = 10000
 
-forget_bias = 0.0
+forget_bias = 1.0
 num_nodes = 200
 embedding_size = 128 # Dimension of the embedding vector.
 keep_prob = 0.5
@@ -61,13 +61,18 @@ with graph.as_default():
   valid_labels = tf.placeholder(tf.int32, shape=[batch_size])
   valid_hot = tf.one_hot(valid_labels, 10000)
 
+  #Keep prob
+  keep_probability = tf.placeholder(tf.float32)
+
   
 
   
-  def lstm_cell():
-    return tf.contrib.rnn.BasicLSTMCell(num_nodes, forget_bias=forget_bias, activation=tf.nn.leaky_relu) #Have to fix vanishing gradient problem, activate with relu. Not possible --> inf norms for clipping
+  def lstm_cell(keep_probability):
+    cell = tf.contrib.rnn.BasicLSTMCell(num_nodes, forget_bias=forget_bias, activation=tf.nn.leaky_relu) 
+    return tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=keep_probability) #Only applies dropout to output weights. Can also apply to state, input, forget. Not compatible with clipping gradients later.
     #tf.contrib.rnn.LSTMBlockCell(num_nodes, forget_bias=forget_bias)# tf.nn.rnn_cell.LSTMCell(num_nodes, forget_bias=forget_bias) #, use_peepholes=True)
-  stacked_lstm = tf.contrib.rnn.MultiRNNCell([lstm_cell() for _ in range(number_of_layers)])
+  
+  stacked_lstm = tf.contrib.rnn.MultiRNNCell([lstm_cell(keep_probability) for _ in range(number_of_layers)])
 
   #LSTM
   # Initial state of the LSTM memory.
@@ -77,10 +82,12 @@ with graph.as_default():
     
   #Unrolled lstm loop  
   for i in range(num_unrollings):
-      
-      embed = tf.nn.embedding_lookup(train_embeddings, train_inputs[i])
+    
     	# The value of state is updated after processing each batch of words.
     	# Look up embeddings for inputs.
+      embed = tf.nn.embedding_lookup(train_embeddings, train_inputs[i])
+      #embed = tf.nn.dropout(embed, keep_prob)
+      #embed = (1/keep_prob)*embed
       output, state = stacked_lstm(embed, state)
 
       outputs.append(output)
@@ -88,19 +95,18 @@ with graph.as_default():
   #Save final state for validation and testing
   final_state = state
   
-
   logits = tf.nn.xw_plus_b(tf.concat(outputs, 0), softmax_w, softmax_b) #Computes matmul, need to have this tf concat, any other and it complains
   logits = tf.layers.batch_normalization(logits, training=True) #Batch normalize to avoid vanishing gradients
-  logits = tf.nn.dropout(logits, keep_prob) #Dropout to reduce overfitting
+  logits = tf.nn.dropout(logits, keep_prob) #Dropout to reduce overfitting. Causes problem with norm later. Apply dropout btw RNN layers.
   logits = (1/keep_prob)*logits #Normalize by multiplying with 2. Then simply remove for validation.
   logits = tf.reshape(logits, [num_unrollings ,batch_size,vocab_size])    
+
   
   #Returns 1D batch-sized float Tensor: The log-perplexity for each sequence.
   #The labels are encoded using a unique int for each word in the vocabulary, but the proabilities
   #are one hot. This is why the train labels have to be one hot as well. 
   
-  loss = tf.nn.softmax_cross_entropy_with_logits_v2(
-    labels=tf.concat(train_labels_hot, 0), logits=logits)
+  loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=tf.concat(train_labels_hot, 0), logits=logits)
   
   train_perplexity = tf.math.exp(tf.reduce_mean(loss)) #Reduce mean is a very "strong" mean
   
@@ -111,9 +117,9 @@ with graph.as_default():
   #Learning rate
   global_step = tf.Variable(0, trainable=False)
   
-  learning_rate = tf.train.exponential_decay(
+  learning_rate = tf.train.exponential_decay( #Lowers learning rate as training progresses. lr*dr^(global_step/decay_step)
   start_learning_rate,     # Base learning rate.
-  global_step,             # Current index into the dataset.
+  global_step,             # Current batch index in the dataset.
   decay_steps,             # Decay step. How often to decay
   decay_rate,              # Decay rate.
   staircase=True)
@@ -131,7 +137,7 @@ with graph.as_default():
 
   #valid_output, state = tf.nn.dynamic_rnn(stacked_lstm, embed, final_state)
   valid_logits = tf.nn.xw_plus_b(valid_output, softmax_w, softmax_b) #Computes matmul, need to have this tf concat, any other and it complains
-  logits = tf.layers.batch_normalization(logits, training=False) #Batch normalize to avoid vanishing gradients
+  valid_logits = tf.layers.batch_normalization(valid_logits, training=False) #Batch normalize to avoid vanishing gradients
   valid_loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=valid_hot, logits=valid_logits)
   valid_perplexity = tf.math.exp(tf.reduce_mean(valid_loss)) #Take mean of softmax probabilities and then the exp --> perplexity. Use e as base, as tf measures the cross-entropy loss with the natural logarithm.
   valid_predictions = tf.argmax(tf.nn.softmax(valid_logits), axis = -1)
@@ -160,7 +166,7 @@ def get_words(predictions):
             
 
 #Graph
-STORE_PATH = '/Users/patbry/Documents/Tensorflow/RNN/visual/'
+STORE_PATH = '/Users/patbry/Documents/Tensorflow/RNN/visual/run_8'
 
 
 
@@ -175,19 +181,18 @@ with tf.Session(graph=graph) as session:
  
   for step in range(num_steps):
   #Get train data and labels
-    if step > 1000:
-      start_learning_rate = 0.1
-
     train_feed_inputs = [] #Lists to store train inputs
     train_feed_labels = []
     
   #Now the structure for the train input is created. Now we have to feed the train_data
+    train_start = random.randint(0,len(train_data)-21*batch_size)
     for i in range(num_unrollings):
     #Has to be sequential - otherwise how can it learn what should come after?
-      train_start = random.randint(0,len(train_data)-2*batch_size)
+      
       train_feed_inputs.append(train_data[train_start:train_start+batch_size])
       train_feed_labels.append(train_data[train_start+batch_size:train_start+2*batch_size])
-      
+
+      train_start+=2*batch_size
 
     train_feed_inputs = np.array(train_feed_inputs)
     train_feed_labels = np.array(train_feed_labels)
@@ -199,11 +204,15 @@ with tf.Session(graph=graph) as session:
 
     #pdb.set_trace()
     #Feed dict
-    feed_dict= {train_inputs: train_feed_inputs, train_labels: train_feed_labels, valid_inputs: valid_feed_inputs, valid_labels: valid_feed_labels }
+    if step%100 == 0:
+      keep_prob = 1.0
+    else:
+      keep_prob = 0.5
+    feed_dict= {train_inputs: train_feed_inputs, train_labels: train_feed_labels, valid_inputs: valid_feed_inputs, valid_labels: valid_feed_labels, global_step: step, keep_probability: keep_prob}
 
     _, t_perplexity, train_pred, v_perplexity, valid_pred, summary = session.run([optimize, train_perplexity, train_predictions, valid_perplexity, valid_predictions, merged], feed_dict= feed_dict)
 
-    writer.add_summary(summary, step)
+    writer.add_summary(summary, step) 
     #Print preds
     if step%100 == 0:
       print('Train perplexity at step %d: %f' % (step, t_perplexity)) #, valid_perplexity.eval()
