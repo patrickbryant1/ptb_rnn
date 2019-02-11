@@ -1,6 +1,9 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 
+'''Predicting text using a RNN of LSTMs on the Penn Treebank Dataset.
+'''
+
 import pdb
 import reader
 import tensorflow as tf
