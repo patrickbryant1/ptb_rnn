@@ -5,7 +5,7 @@ import pdb
 import reader
 import tensorflow as tf
 import numpy as np
-import seaborn as sns
+
 
 
 
@@ -15,27 +15,26 @@ raw_data = reader.ptb_raw_data(data_path)
 train_data, valid_data, test_data, vocabulary = raw_data
 
 #Parameters
-start_learning_rate = 1.0
-decay_steps = 10000 #1 epoch = 1000000/(batch_size*num_unrollings) steps
-decay_rate = 0.8
-max_grad_norm = 5
-
-number_of_layers = 2
-num_unrollings = 35
+number_of_layers = 3
+num_unrollings = 40
 batch_size = 20
 vocab_size = 10000
 
 forget_bias = 0.0 #Bias for LSTMs forget gate, reduce forgetting in beginning of training
-num_nodes = 650
+num_nodes = 300
 embedding_size = num_nodes # Dimension of the embedding vector. 1:1 ratio with hidden nodes
-w_dev = 1/tf.math.sqrt(float(num_nodes))
-init_scale = 0.05
-
-keep_prob = 0.5
-num_steps = 20000
+init_scale = 0.1
 epoch_length = len(train_data)/(num_unrollings*batch_size)
-epsilon = 0.00001
-penalty = 1.1
+
+start_learning_rate = 1.0
+decay_steps = epoch_length 
+decay_rate = 0.5
+max_grad_norm = 0.5
+
+keep_prob = 0.7
+num_steps = 20000
+epsilon = 0.0000001
+penalty = 2.0
 
 
 
@@ -94,8 +93,10 @@ with graph.as_default():
       # The value of state is updated after processing each batch of words.
       # Look up embeddings for inputs.
       embed = tf.nn.embedding_lookup(embeddings, train_inputs[i])
-      embed = tf.nn.dropout(embed, keep_prob = keep_probability)
-      embed = tf.math.scalar_mul(embed_scaling, embed)
+      #Embed dropout and scaling
+      #embed = tf.nn.dropout(embed, keep_prob = keep_probability)
+      #embed = tf.math.scalar_mul(embed_scaling, embed)
+      #Output, state of  LSTM
       output, state = stacked_lstm(embed, state)
 
       outputs.append(output)
@@ -104,18 +105,18 @@ with graph.as_default():
   final_state = state
 
   logits = tf.nn.xw_plus_b(tf.concat(outputs, 0), softmax_w, softmax_b) #Computes matmul, need to have this tf concat, any other and it complains
-  #logits = tf.layers.batch_normalization(logits, training=True) #Batch normalize to avoid vanishing gradients
+  logits = tf.layers.batch_normalization(logits, training=True) #Batch normalize to avoid vanishing gradients
   logits = tf.reshape(logits, [num_unrollings ,batch_size,vocab_size])   
-  #logits = tf.math.add(logits, add_noise)
+
 
   
   #Returns 1D batch-sized float Tensor: The log-perplexity for each sequence.
   #The labels are encoded using a unique int for each word in the vocabulary, but the proabilities
   #are one hot. This is why the train labels have to be one hot as well. 
   
-  loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=tf.concat(train_labels_hot, 0), logits=logits) #Change to the cosine version. Now the embedding length is used - right? 
-
+  loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=tf.concat(train_labels_hot, 0), logits=logits) 
   #Linearly constrained weights to reduce angle bias
+  #true_train_perplexity = tf.math.exp(tf.reduce_mean(loss)) #Train perplexity before addition of penalty
   #loss = tf.cond(tf.abs(tf.reduce_sum(softmax_w)) > epsilon, lambda:tf.multiply(penalty, loss), lambda:tf.add(loss, 0)) #condition, TRUE, FALSE
   train_perplexity = tf.math.exp(tf.reduce_mean(loss)) #Reduce mean is a very "strong" mean
   train_predictions = tf.argmax(tf.nn.softmax(logits), axis = -1)
@@ -143,16 +144,12 @@ with graph.as_default():
   gradients, _ = tf.clip_by_global_norm(gradients, max_grad_norm)
   optimize = optimizer.apply_gradients(zip(gradients, variables))
 
-  #Store gradients in histogram
-  #tf.summary.histogram('gradients', gradients)
-
  #Validation
   
   valid_embed = tf.nn.embedding_lookup(embeddings, valid_inputs)
   valid_output, state = stacked_lstm(valid_embed, final_state)
 
   valid_logits = tf.nn.xw_plus_b(valid_output, softmax_w, softmax_b) #Computes matmul, need to have this tf concat, any other and it complains
-  #valid_logits = tf.layers.batch_normalization(valid_logits, training=False) #Batch normalize to avoid vanishing gradients
   valid_loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=valid_hot, logits=valid_logits)
   valid_perplexity = tf.math.exp(tf.reduce_mean(valid_loss)) #Take mean of softmax probabilities and then the exp --> perplexity. Use e as base, as tf measures the cross-entropy loss with the natural logarithm.
   valid_predictions = tf.argmax(tf.nn.softmax(valid_logits), axis = -1)
@@ -162,6 +159,7 @@ with graph.as_default():
   variables_names =[v.name for v in tf.trainable_variables()]
   # add a summary to store the perplexity
   tf.summary.scalar('train_perplexity', train_perplexity)
+  #tf.summary.scalar('true_train_perplexity', true_train_perplexity)
   tf.summary.scalar('validation_perplexity', valid_perplexity)
 
   merged = tf.summary.merge_all()
@@ -182,8 +180,8 @@ def get_words(predictions):
     return pred_words
             
 
-#Graph
-STORE_PATH = '/Users/patbry/Documents/Tensorflow/ptb_rnn/visual/run_8'
+#Visualizing output
+STORE_PATH = '/Users/patbry/Documents/Tensorflow/ptb_rnn/visual/run_7'
 from tensorboard_logging import Logger
 logger = Logger(STORE_PATH+'/activations')
 
@@ -251,12 +249,11 @@ with tf.Session(graph=graph) as session:
       #Get all trainable variables
       variables_names =[v.name for v in tf.trainable_variables()]
       values = session.run(variables_names, feed_dict= feed_dict)
+      #Write hidden activations to tensorboard for visualization
       for i in range(len(variables_names)):
         if '/lstm_cell' in (variables_names[i]):
           logger.log_histogram(variables_names[i], values[i], step)
-      
-      sns.heatmap(df, annot=True, annot_kws={"size": 7})
-
+         
       
       writer.add_summary(summary, step)
       print('Train perplexity at step %d: %f' % (step, t_perplexity)) #, valid_perplexity.eval()
