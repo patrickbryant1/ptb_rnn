@@ -26,15 +26,15 @@ embedding_size = num_nodes # Dimension of the embedding vector. 1:1 ratio with h
 init_scale = 0.1
 epoch_length = len(train_data)/(num_unrollings*batch_size)
 
-start_learning_rate = 1.0
+start_learning_rate = 5.0
 decay_steps = epoch_length 
 decay_rate = 0.5
-max_grad_norm = 0.5
+max_grad_norm = 0.25
 
-keep_prob = 0.7
-num_steps = 20000
+keep_prob = 0.9
+num_steps = 50000
 epsilon = 0.0000001
-penalty = 2.0
+penalty = 1.3
 
 
 
@@ -73,9 +73,9 @@ with graph.as_default():
 
   
 
-  
+  #Define the LSTM cell erchitecture to be used  
   def lstm_cell(keep_probability):
-    cell = tf.contrib.rnn.LSTMBlockCell(num_nodes, forget_bias=forget_bias) #, activation=tf.nn.leaky_relu) 
+    cell = tf.contrib.rnn.BasicLSTMCell(num_nodes, forget_bias=forget_bias, activation = tf.nn.elu)
     return tf.contrib.rnn.DropoutWrapper(cell, output_keep_prob=keep_probability, variational_recurrent = True, dtype = tf.float32) #Only applies dropout to output weights. Can also apply to state, input, forget.
     #The variational_recurrent = True applies the same dropout mask in every step - allowing more long-term dependencies to be learned   
   
@@ -93,9 +93,9 @@ with graph.as_default():
       # The value of state is updated after processing each batch of words.
       # Look up embeddings for inputs.
       embed = tf.nn.embedding_lookup(embeddings, train_inputs[i])
-      #Embed dropout and scaling
-      #embed = tf.nn.dropout(embed, keep_prob = keep_probability)
-      #embed = tf.math.scalar_mul(embed_scaling, embed)
+      Embed dropout and scaling
+      embed = tf.nn.dropout(embed, keep_prob = keep_probability)
+      embed = tf.math.scalar_mul(embed_scaling, embed)
       #Output, state of  LSTM
       output, state = stacked_lstm(embed, state)
 
@@ -116,8 +116,8 @@ with graph.as_default():
   
   loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=tf.concat(train_labels_hot, 0), logits=logits) 
   #Linearly constrained weights to reduce angle bias
-  #true_train_perplexity = tf.math.exp(tf.reduce_mean(loss)) #Train perplexity before addition of penalty
-  #loss = tf.cond(tf.abs(tf.reduce_sum(softmax_w)) > epsilon, lambda:tf.multiply(penalty, loss), lambda:tf.add(loss, 0)) #condition, TRUE, FALSE
+  true_train_perplexity = tf.math.exp(tf.reduce_mean(loss)) #Train perplexity before addition of penalty
+  loss = tf.cond(tf.abs(tf.reduce_sum(softmax_w)) > epsilon, lambda:tf.multiply(penalty, loss), lambda:tf.add(loss, 0)) #condition, TRUE, FALSE
   train_perplexity = tf.math.exp(tf.reduce_mean(loss)) #Reduce mean is a very "strong" mean
   train_predictions = tf.argmax(tf.nn.softmax(logits), axis = -1)
 
@@ -159,7 +159,7 @@ with graph.as_default():
   variables_names =[v.name for v in tf.trainable_variables()]
   # add a summary to store the perplexity
   tf.summary.scalar('train_perplexity', train_perplexity)
-  #tf.summary.scalar('true_train_perplexity', true_train_perplexity)
+  tf.summary.scalar('true_train_perplexity', true_train_perplexity)
   tf.summary.scalar('validation_perplexity', valid_perplexity)
 
   merged = tf.summary.merge_all()
@@ -181,7 +181,7 @@ def get_words(predictions):
             
 
 #Visualizing output
-STORE_PATH = '/Users/patbry/Documents/Tensorflow/ptb_rnn/visual/run_7'
+STORE_PATH = '/Users/patbry/Documents/Tensorflow/outputs/visual/run_1'
 from tensorboard_logging import Logger
 logger = Logger(STORE_PATH+'/activations')
 
@@ -236,6 +236,7 @@ with tf.Session(graph=graph) as session:
     else:
       _, t_perplexity, train_pred, summary, _ = session.run([optimize, train_perplexity, train_predictions, merged, learning_rate_decay], feed_dict= feed_dict)
 
+    #Write monitored parameters to disk for visualization in tensorboard
     writer.add_summary(summary, step) 
 
 
