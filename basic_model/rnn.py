@@ -93,7 +93,7 @@ with graph.as_default():
       # The value of state is updated after processing each batch of words.
       # Look up embeddings for inputs.
       embed = tf.nn.embedding_lookup(embeddings, train_inputs[i])
-      Embed dropout and scaling
+      #Embed dropout and scaling
       embed = tf.nn.dropout(embed, keep_prob = keep_probability)
       embed = tf.math.scalar_mul(embed_scaling, embed)
       #Output, state of  LSTM
