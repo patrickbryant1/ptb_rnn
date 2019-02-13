@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import pdb
-import reader
+import ../in_out/reader
 import tensorflow as tf
 import numpy as np
 
@@ -182,7 +182,7 @@ def get_words(predictions):
 
 #Visualizing output
 STORE_PATH = '/Users/patbry/Documents/Tensorflow/outputs/visual/run_1'
-from tensorboard_logging import Logger
+from ../in_out/tensorboard_logging import Logger
 logger = Logger(STORE_PATH+'/activations')
 
 
